@@ -4,7 +4,7 @@ from discord import app_commands
 import json
 import os
 import csv
-from datetime import datetime, timezone as dt_timezone # Renamed to avoid conflict
+from datetime import datetime, timezone as dt_timezone
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone, all_timezones
@@ -71,7 +71,7 @@ async def on_ready():
     scheduler.start()
 
 async def check_reminders():
-    now = datetime.now(dt_timezone.utc) # Use timezone-aware UTC time
+    now = datetime.now(dt_timezone.utc)
     reminders = load_reminders()
     updated_reminders = []
     for r in reminders:
@@ -79,7 +79,6 @@ async def check_reminders():
         if now >= reminder_time:
             try:
                 user = await bot.fetch_user(r["user_id"])
-                # Added author details to the reminder message
                 reminder_msg = f"\u23F0 **Reminder from {r['author_name']}:** {r['message']}"
                 await user.send(reminder_msg)
             except discord.NotFound:
@@ -101,52 +100,16 @@ async def set_timezone(interaction: discord.Interaction, timezone_name: str):
 
     await interaction.response.send_message(f"\u2705 Your timezone has been set to **{timezone_name}**.", ephemeral=True)
 
-@bot.tree.command(name="rm", description="Set a personal reminder for yourself using your saved timezone.")
+# === MODIFIED COMMAND ===
+@bot.tree.command(name="rm", description="Set a reminder for one or more users.")
 @app_commands.describe(
-    message="What do you want to be reminded of?",
-    time_str="The time for the reminder (e.g., '07-25-2025 15:30')."
-)
-async def remember(interaction: discord.Interaction, message: str, time_str: str):
-    user_timezones = load_user_timezones()
-    user_id_str = str(interaction.user.id)
-
-    if user_id_str not in user_timezones:
-        await interaction.response.send_message("\u274C You haven't set your timezone yet! Please use the `/set_timezone` command first.", ephemeral=True)
-        return
-
-    tz_str = user_timezones[user_id_str]
-    try:
-        tz = timezone(tz_str)
-        local_time = datetime.strptime(time_str, "%m-%d-%Y %H:%M")
-        aware_time = tz.localize(local_time).astimezone(dt_timezone.utc)
-    except Exception:
-        await interaction.response.send_message("\u274C Invalid time format. Please use `MM-DD-YYYY HH:MM`.", ephemeral=True)
-        return
-
-    reminder = {
-        "user_id": interaction.user.id,
-        "author_name": interaction.user.display_name, # Added for context
-        "message": message,
-        "time": aware_time.isoformat()
-    }
-
-    reminders = load_reminders()
-    reminders.append(reminder)
-    save_reminders(reminders)
-
-    await interaction.response.send_message(f"\u2705 I will remind you to **{message}** on `{time_str}` (in your timezone, {tz_str}).")
-
-
-# === NEW COMMAND ===
-@bot.tree.command(name="remind", description="Set a reminder for other users.")
-@app_commands.describe(
-    user1="The first user to remind.",
-    message="The message for the reminder.",
+    user1="The primary user to remind.",
+    message="What you want to remind them of.",
     time_str="The time for the reminder (e.g., '07-25-2025 15:30').",
     user2="An optional second user to remind.",
     user3="An optional third user to remind."
 )
-async def remind_others(interaction: discord.Interaction, user1: discord.User, message: str, time_str: str, user2: discord.User = None, user3: discord.User = None):
+async def remember(interaction: discord.Interaction, user1: discord.User, message: str, time_str: str, user2: discord.User = None, user3: discord.User = None):
     # Check timezone of the person setting the reminder
     user_timezones = load_user_timezones()
     author_id_str = str(interaction.user.id)
@@ -154,6 +117,7 @@ async def remind_others(interaction: discord.Interaction, user1: discord.User, m
         await interaction.response.send_message("\u274C You must set your own timezone with `/set_timezone` before reminding others.", ephemeral=True)
         return
 
+    # Parse the time using the author's timezone
     tz_str = user_timezones[author_id_str]
     try:
         tz = timezone(tz_str)
@@ -163,9 +127,11 @@ async def remind_others(interaction: discord.Interaction, user1: discord.User, m
         await interaction.response.send_message("\u274C Invalid time format. Please use `MM-DD-YYYY HH:MM`.", ephemeral=True)
         return
 
+    # Collect all mentioned users
     targets = [u for u in [user1, user2, user3] if u is not None]
     reminders = load_reminders()
     
+    # Create a reminder for each target user
     for target_user in targets:
         reminder = {
             "user_id": target_user.id,
@@ -199,8 +165,7 @@ async def help_command(interaction: discord.Interaction):
         "`/deauthorize @user` – Revokes a user's permission.\n\n"
         "**\u23F0 Reminder Commands:**\n"
         "`/set_timezone timezone_name` – **Set this first!** Saves your local timezone.\n"
-        "`/rm message time_str` – Sets a personal reminder.\n"
-        "`/remind @user(s) message time_str` – Sets a reminder for other people."
+        "`/rm @user(s) message time_str` – Sets a reminder for other people (or yourself!)."
     )
     await interaction.response.send_message(help_text, ephemeral=True)
     
