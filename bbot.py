@@ -4,7 +4,7 @@ from discord import app_commands
 import json
 import os
 import csv
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone # Renamed to avoid conflict
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone, all_timezones
@@ -71,7 +71,7 @@ async def on_ready():
     scheduler.start()
 
 async def check_reminders():
-    now = datetime.now(timezone("UTC"))
+    now = datetime.now(dt_timezone.utc) # Use timezone-aware UTC time
     reminders = load_reminders()
     updated_reminders = []
     for r in reminders:
@@ -79,7 +79,9 @@ async def check_reminders():
         if now >= reminder_time:
             try:
                 user = await bot.fetch_user(r["user_id"])
-                await user.send(f"\u23F0 **Reminder:** {r['message']}")
+                # Added author details to the reminder message
+                reminder_msg = f"\u23F0 **Reminder from {r['author_name']}:** {r['message']}"
+                await user.send(reminder_msg)
             except discord.NotFound:
                 print(f"User with ID {r['user_id']} not found for reminder.")
         else:
@@ -99,8 +101,7 @@ async def set_timezone(interaction: discord.Interaction, timezone_name: str):
 
     await interaction.response.send_message(f"\u2705 Your timezone has been set to **{timezone_name}**.", ephemeral=True)
 
-# === MODIFIED COMMAND NAME ===
-@bot.tree.command(name="rm", description="Set a reminder for yourself using your saved timezone.")
+@bot.tree.command(name="rm", description="Set a personal reminder for yourself using your saved timezone.")
 @app_commands.describe(
     message="What do you want to be reminded of?",
     time_str="The time for the reminder (e.g., '07-25-2025 15:30')."
@@ -117,13 +118,14 @@ async def remember(interaction: discord.Interaction, message: str, time_str: str
     try:
         tz = timezone(tz_str)
         local_time = datetime.strptime(time_str, "%m-%d-%Y %H:%M")
-        aware_time = tz.localize(local_time).astimezone(timezone("UTC"))
+        aware_time = tz.localize(local_time).astimezone(dt_timezone.utc)
     except Exception:
         await interaction.response.send_message("\u274C Invalid time format. Please use `MM-DD-YYYY HH:MM`.", ephemeral=True)
         return
 
     reminder = {
         "user_id": interaction.user.id,
+        "author_name": interaction.user.display_name, # Added for context
         "message": message,
         "time": aware_time.isoformat()
     }
@@ -135,8 +137,50 @@ async def remember(interaction: discord.Interaction, message: str, time_str: str
     await interaction.response.send_message(f"\u2705 I will remind you to **{message}** on `{time_str}` (in your timezone, {tz_str}).")
 
 
+# === NEW COMMAND ===
+@bot.tree.command(name="remind", description="Set a reminder for other users.")
+@app_commands.describe(
+    user1="The first user to remind.",
+    message="The message for the reminder.",
+    time_str="The time for the reminder (e.g., '07-25-2025 15:30').",
+    user2="An optional second user to remind.",
+    user3="An optional third user to remind."
+)
+async def remind_others(interaction: discord.Interaction, user1: discord.User, message: str, time_str: str, user2: discord.User = None, user3: discord.User = None):
+    # Check timezone of the person setting the reminder
+    user_timezones = load_user_timezones()
+    author_id_str = str(interaction.user.id)
+    if author_id_str not in user_timezones:
+        await interaction.response.send_message("\u274C You must set your own timezone with `/set_timezone` before reminding others.", ephemeral=True)
+        return
+
+    tz_str = user_timezones[author_id_str]
+    try:
+        tz = timezone(tz_str)
+        local_time = datetime.strptime(time_str, "%m-%d-%Y %H:%M")
+        aware_time = tz.localize(local_time).astimezone(dt_timezone.utc)
+    except Exception:
+        await interaction.response.send_message("\u274C Invalid time format. Please use `MM-DD-YYYY HH:MM`.", ephemeral=True)
+        return
+
+    targets = [u for u in [user1, user2, user3] if u is not None]
+    reminders = load_reminders()
+    
+    for target_user in targets:
+        reminder = {
+            "user_id": target_user.id,
+            "author_name": interaction.user.display_name,
+            "message": message,
+            "time": aware_time.isoformat()
+        }
+        reminders.append(reminder)
+
+    save_reminders(reminders)
+    
+    target_mentions = ", ".join(t.mention for t in targets)
+    await interaction.response.send_message(f"\u2705 Reminder set! I will remind {target_mentions} to **{message}** on `{time_str}`.")
+
 # === Budget Bot Commands ===
-# === UPDATED HELP TEXT ===
 @bot.tree.command(name="help", description="Displays a list of all available commands.")
 async def help_command(interaction: discord.Interaction):
     help_text = (
@@ -155,10 +199,11 @@ async def help_command(interaction: discord.Interaction):
         "`/deauthorize @user` – Revokes a user's permission.\n\n"
         "**\u23F0 Reminder Commands:**\n"
         "`/set_timezone timezone_name` – **Set this first!** Saves your local timezone.\n"
-        "`/rm message time_str` – Sets a personal reminder using your saved timezone."
+        "`/rm message time_str` – Sets a personal reminder.\n"
+        "`/remind @user(s) message time_str` – Sets a reminder for other people."
     )
     await interaction.response.send_message(help_text, ephemeral=True)
-
+    
 @bot.tree.command(name="add", description="Add a new income or expense transaction.")
 @app_commands.describe(
     trans_type="The type of transaction.",
@@ -226,7 +271,7 @@ async def edit(interaction: discord.Interaction, trans_id: int, field: str, new_
                 t[field] = new_value
             found = True
             break
-
+    
     if found:
         save_data(transactions)
         await interaction.response.send_message(f"\u2705 Transaction `{trans_id}` updated successfully.")
@@ -271,7 +316,6 @@ async def export(interaction: discord.Interaction):
         await interaction.response.send_message("\U0001F4ED No transactions to export.", ephemeral=True)
         return
 
-    # Use temporary file paths to avoid conflicts
     json_path = f"budget_export_{interaction.user.id}.json"
     csv_path = f"budget_export_{interaction.user.id}.csv"
 
@@ -291,7 +335,6 @@ async def export(interaction: discord.Interaction):
     except discord.Forbidden:
         await interaction.response.send_message("❌ I couldn't send you a DM. Please check your privacy settings.", ephemeral=True)
     finally:
-        # Clean up the created files
         if os.path.exists(json_path):
             os.remove(json_path)
         if os.path.exists(csv_path):
@@ -377,7 +420,7 @@ async def delete(interaction: discord.Interaction, transaction_id: int):
     transactions = load_data()
     original_count = len(transactions)
     new_data = [t for t in transactions if t.get('id') != transaction_id]
-
+    
     if len(new_data) == original_count:
         await interaction.response.send_message("\u274C Transaction not found.", ephemeral=True)
     else:
