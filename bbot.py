@@ -71,7 +71,7 @@ async def on_ready():
     scheduler.start()
 
 async def check_reminders():
-    now = datetime.utcnow()
+    now = datetime.now(timezone("UTC"))
     reminders = load_reminders()
     updated_reminders = []
     for r in reminders:
