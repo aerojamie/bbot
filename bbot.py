@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pytz import timezone, all_timezones
 
+# RUN ------ git pull origin main
+
 # === Load token ===
 load_dotenv("token.env")
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
