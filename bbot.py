@@ -106,30 +106,75 @@ async def set_timezone(interaction: discord.Interaction, timezone_name: str):
 
     await interaction.response.send_message(f"\u2705 Your timezone has been set to **{timezone_name}**.", ephemeral=True)
 
+# === UPDATED REMINDER COMMAND ===
 @bot.tree.command(name="rm", description="Set a reminder for one or more users.")
 @app_commands.describe(
-    user1="The primary user to remind.",
     message="What you want to remind them of.",
-    time_str="The time for the reminder (e.g., '07-25-2025 15:30').",
+    year="The year for the reminder (e.g., 2025).",
+    day="The day for the reminder (1-31).",
+    hour="The hour in 24-hour format (0-23).",
+    minute="The minute (0-59).",
+    user1="The primary user to remind.",
     user2="An optional second user to remind.",
-    user3="An optional third user to remind."
+    user3="An optional third user to remind.",
+    month="The month for the reminder."
 )
-async def remember(interaction: discord.Interaction, user1: discord.User, message: str, time_str: str, user2: discord.User = None, user3: discord.User = None):
+@app_commands.choices(month=[
+    app_commands.Choice(name="January", value=1),
+    app_commands.Choice(name="February", value=2),
+    app_commands.Choice(name="March", value=3),
+    app_commands.Choice(name="April", value=4),
+    app_commands.Choice(name="May", value=5),
+    app_commands.Choice(name="June", value=6),
+    app_commands.Choice(name="July", value=7),
+    app_commands.Choice(name="August", value=8),
+    app_commands.Choice(name="September", value=9),
+    app_commands.Choice(name="October", value=10),
+    app_commands.Choice(name="November", value=11),
+    app_commands.Choice(name="December", value=12),
+])
+async def remember(
+    interaction: discord.Interaction, 
+    message: str, 
+    year: app_commands.Range[int, datetime.now().year, 3000],
+    month: int,
+    day: app_commands.Range[int, 1, 31],
+    hour: app_commands.Range[int, 0, 23],
+    minute: app_commands.Range[int, 0, 59],
+    user1: discord.User, 
+    user2: discord.User = None, 
+    user3: discord.User = None
+):
     # Check timezone of the person setting the reminder
     user_timezones = load_user_timezones()
     author_id_str = str(interaction.user.id)
     if author_id_str not in user_timezones:
-        await interaction.response.send_message("\u274C You must set your own timezone with `/set_timezone` before reminding others.", ephemeral=True)
+        await interaction.response.send_message(
+            "\u274C You must set your own timezone with `/set_timezone` before reminding others.", 
+            ephemeral=True
+        )
         return
 
     # Parse the time using the author's timezone
     tz_str = user_timezones[author_id_str]
     try:
         tz = timezone(tz_str)
-        local_time = datetime.strptime(time_str, "%m-%d-%Y %H:%M")
+        # Construct the datetime object from the new, separate inputs
+        local_time = datetime(year, month, day, hour, minute)
         aware_time = tz.localize(local_time).astimezone(dt_timezone.utc)
-    except Exception:
-        await interaction.response.send_message("\u274C Invalid time format. Please use `MM-DD-YYYY HH:MM`.", ephemeral=True)
+        
+        # Check if the chosen time is in the past
+        if aware_time < datetime.now(dt_timezone.utc):
+            await interaction.response.send_message("\u274C You can't set a reminder for a time in the past.", ephemeral=True)
+            return
+            
+    except ValueError:
+        # This catches invalid dates, e.g., February 30th.
+        await interaction.response.send_message("\u274C The date you entered is invalid. Please check the day, month, and year.", ephemeral=True)
+        return
+    except Exception as e:
+        print(f"Error creating reminder time: {e}") # Log error for debugging
+        await interaction.response.send_message("\u274C An error occurred while processing the time.", ephemeral=True)
         return
 
     # Collect all mentioned users
@@ -148,8 +193,12 @@ async def remember(interaction: discord.Interaction, user1: discord.User, messag
 
     save_reminders(reminders)
     
+    # Use a Discord timestamp for a clean, auto-localizing confirmation message
+    time_unix = int(aware_time.timestamp())
     target_mentions = ", ".join(t.mention for t in targets)
-    await interaction.response.send_message(f"\u2705 Reminder set! I will remind {target_mentions} to **{message}** on `{time_str}`.")
+    await interaction.response.send_message(
+        f"\u2705 Reminder set! I will remind {target_mentions} to **{message}** on <t:{time_unix}:F> (which is <t:{time_unix}:R>)."
+    )
 
 # === New Paycheck Estimator Commands ===
 @bot.tree.command(name="setjob", description="Set your job title and hourly wage.")
@@ -233,7 +282,7 @@ async def help_command(interaction: discord.Interaction):
         "`/deauthorize @user` – Revokes a user's permission.\n\n"
         "**\u23F0 Reminder Commands:**\n"
         "`/set_timezone timezone_name` – **Set this first!** Saves your local timezone.\n"
-        "`/rm @user(s) message time_str` – Sets a reminder for other people (or yourself!).\n\n"
+        "`/rm @user(s) message year month day hour minute` – Sets a reminder for other people (or yourself!).\n\n"
         "**\U0001F4B5 Paycheck Estimator:**\n"
         "`/setjob job_name wage_per_hour` – Set your job and hourly wage.\n"
         "`/estimate @user hours_worked` – Estimate a user's paycheck."
