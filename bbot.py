@@ -18,6 +18,7 @@ AUTHORIZED_USERS_FILE = "authorized_users.json"
 DATA_FILE = "shared_budget.json"
 REMINDERS_FILE = "reminders.json"
 USER_TIMEZONES_FILE = "user_timezones.json"
+USER_JOBS_FILE = "user_jobs.json" # New file for job data
 
 # === File Initialization ===
 def initialize_json_file(file_path, default_data):
@@ -29,6 +30,7 @@ initialize_json_file(AUTHORIZED_USERS_FILE, [922857347494318100, 112174542197123
 initialize_json_file(DATA_FILE, [])
 initialize_json_file(REMINDERS_FILE, [])
 initialize_json_file(USER_TIMEZONES_FILE, {})
+initialize_json_file(USER_JOBS_FILE, {}) # Initialize the new jobs file
 
 # === Data Loading and Saving Functions ===
 def load_json_data(file_path):
@@ -36,7 +38,7 @@ def load_json_data(file_path):
         with open(file_path, 'r') as f:
             return json.load(f)
     except (json.JSONDecodeError, FileNotFoundError):
-        return {} if file_path == USER_TIMEZONES_FILE else []
+        return {} if file_path in [USER_TIMEZONES_FILE, USER_JOBS_FILE] else []
 
 def save_json_data(file_path, data):
     with open(file_path, 'w') as f:
@@ -51,6 +53,8 @@ def load_reminders(): return load_json_data(REMINDERS_FILE)
 def save_reminders(reminders): save_json_data(REMINDERS_FILE, reminders)
 def load_user_timezones(): return load_json_data(USER_TIMEZONES_FILE)
 def save_user_timezones(timezones): save_json_data(USER_TIMEZONES_FILE, timezones)
+def load_user_jobs(): return load_json_data(USER_JOBS_FILE)
+def save_user_jobs(jobs): save_json_data(USER_JOBS_FILE, jobs)
 
 
 # === Discord setup ===
@@ -100,7 +104,6 @@ async def set_timezone(interaction: discord.Interaction, timezone_name: str):
 
     await interaction.response.send_message(f"\u2705 Your timezone has been set to **{timezone_name}**.", ephemeral=True)
 
-# === MODIFIED COMMAND ===
 @bot.tree.command(name="rm", description="Set a reminder for one or more users.")
 @app_commands.describe(
     user1="The primary user to remind.",
@@ -146,6 +149,69 @@ async def remember(interaction: discord.Interaction, user1: discord.User, messag
     target_mentions = ", ".join(t.mention for t in targets)
     await interaction.response.send_message(f"\u2705 Reminder set! I will remind {target_mentions} to **{message}** on `{time_str}`.")
 
+# === New Paycheck Estimator Commands ===
+@bot.tree.command(name="setjob", description="Set your job title and hourly wage.")
+@app_commands.describe(
+    job_name="Your job title.",
+    wage_per_hour="Your hourly wage (e.g., 15.50)."
+)
+async def setjob(interaction: discord.Interaction, job_name: str, wage_per_hour: float):
+    if interaction.user.id not in load_auth_users():
+        await interaction.response.send_message("\u274C You are not authorized to use this command.", ephemeral=True)
+        return
+    
+    if wage_per_hour <= 0:
+        await interaction.response.send_message("\u274C Wage must be a positive number.", ephemeral=True)
+        return
+
+    user_jobs = load_user_jobs()
+    user_jobs[str(interaction.user.id)] = {
+        "job_name": job_name,
+        "wage_per_hour": wage_per_hour
+    }
+    save_user_jobs(user_jobs)
+
+    await interaction.response.send_message(f"\u2705 Your job has been set to **{job_name}** with a wage of **${wage_per_hour:.2f}/hour**.")
+
+@bot.tree.command(name="estimate", description="Estimate a user's paycheck based on hours worked.")
+@app_commands.describe(
+    user="The user whose paycheck you want to estimate.",
+    hours_worked="The number of hours worked."
+)
+async def estimate(interaction: discord.Interaction, user: discord.User, hours_worked: float):
+    if interaction.user.id not in load_auth_users():
+        await interaction.response.send_message("\u274C You are not authorized to use this command.", ephemeral=True)
+        return
+
+    user_jobs = load_user_jobs()
+    user_id_str = str(user.id)
+
+    if user_id_str not in user_jobs:
+        await interaction.response.send_message(f"\u274C **{user.display_name}** has not set a job yet. They can do so with `/setjob`.", ephemeral=True)
+        return
+        
+    job_info = user_jobs[user_id_str]
+    wage = job_info['wage_per_hour']
+    
+    gross_pay = wage * hours_worked
+    # Simplified deduction model (e.g., 25% flat rate for taxes, etc.)
+    # This can be made more complex later if needed.
+    deductions = gross_pay * 0.25 
+    net_pay = gross_pay - deductions
+
+    embed = discord.Embed(
+        title=f"Paycheck Estimate for {user.display_name}",
+        description=f"Based on **{hours_worked} hours** worked at **${wage:.2f}/hour**.",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="Gross Pay", value=f"`${gross_pay:,.2f}`", inline=False)
+    embed.add_field(name="Estimated Deductions (25%)", value=f"`-${deductions:,.2f}`", inline=False)
+    embed.add_field(name="Estimated Net Pay", value=f"**`${net_pay:,.2f}`**", inline=False)
+    embed.set_footer(text="Note: This is a rough estimate. Actual pay may vary.")
+
+    await interaction.response.send_message(embed=embed)
+
+
 # === Budget Bot Commands ===
 @bot.tree.command(name="help", description="Displays a list of all available commands.")
 async def help_command(interaction: discord.Interaction):
@@ -165,7 +231,10 @@ async def help_command(interaction: discord.Interaction):
         "`/deauthorize @user` – Revokes a user's permission.\n\n"
         "**\u23F0 Reminder Commands:**\n"
         "`/set_timezone timezone_name` – **Set this first!** Saves your local timezone.\n"
-        "`/rm @user(s) message time_str` – Sets a reminder for other people (or yourself!)."
+        "`/rm @user(s) message time_str` – Sets a reminder for other people (or yourself!).\n\n"
+        "**\U0001F4B5 Paycheck Estimator:**\n"
+        "`/setjob job_name wage_per_hour` – Set your job and hourly wage.\n"
+        "`/estimate @user hours_worked` – Estimate a user's paycheck."
     )
     await interaction.response.send_message(help_text, ephemeral=True)
     
